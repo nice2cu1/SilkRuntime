@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Derived from exlaunch f9f4b0dd07b68f97958cb9c79228bbca22ca80d5.
+# Exclude only reproducible build products, local packages and development caches.
+# See THIRD_PARTY_NOTICES.md and licenses/source-inventory.json.
+
+# Generated devkitPro build products.
+/output/
+/build/
+/deploy/
+/*.elf
+/*.nso
+/*.npdm
+/*.map
+
+# Locally generated SD/release staging.
+/atmosphere/
+/dist/
+/release/
+
+# Local development documentation; public build instructions live in README.md.
+/docs/
+
+# Development-only GDB diagnostics; public builds do not require these scripts.
+/tools/switch_gdb/
+
+# Python/GDB caches.
+__pycache__/
+*.pyc
+
+# Local SD/FTP configuration should be reviewed before publication.
+*.local.mk

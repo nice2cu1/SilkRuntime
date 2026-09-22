@@ -1,0 +1,7 @@
+SPDX-License-Identifier: GPL-2.0-only
+
+Source: exlaunch config.json
+Revision: f9f4b0dd07b68f97958cb9c79228bbca22ca80d5
+Modified for SilkRuntime: module name, program ID and configuration fields.
+This notice accompanies the JSON file without altering its data format.
+See THIRD_PARTY_NOTICES.md, licenses/source-inventory.json and LICENSE in the project root.
