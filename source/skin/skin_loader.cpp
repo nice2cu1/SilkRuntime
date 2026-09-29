@@ -1,6 +1,7 @@
 #include "skin_loader.hpp"
 
 #include "image/png_loader.hpp"
+#include "loaded_texture_scanner.hpp"
 #include "replacement_database.hpp"
 #include "skin_scanner.hpp"
 #include "tk2d/tk2d_probe.hpp"
@@ -21,6 +22,8 @@ constexpr char kSkinRootParent[] = "rom:/SilkModLoader/Mods/Skin";
 
 SkinScanner g_Scanner;
 unity::TextureReplacer g_TextureReplacer;
+LoadedTextureScanner g_LoadedTextures;
+bool g_DiscoveryInProgress{};
 bool g_TextureBindingComplete{};
 bool g_SkinAvailable{};
 char g_SkinRoot[kReplacementPathCapacity]{};
@@ -34,19 +37,14 @@ struct AppliedTextureRecord {
 
 AppliedTextureRecord g_AppliedTextures[kMaxReplacementTextures]{};
 
-struct AppliedStandaloneRecord {
+struct AppliedNamedRecord {
     char name[kResourceNameCapacity]{};
-    std::uintptr_t textureAddress{};
+    std::uintptr_t native{};
+    std::int32_t instanceId{};
 };
 
-AppliedStandaloneRecord g_AppliedStandalone[kMaxReplacementTextures]{};
-
-struct AppliedSpriteRecord {
-    char name[kResourceNameCapacity]{};
-    std::uintptr_t textureAddress{};
-};
-
-AppliedSpriteRecord g_AppliedSprites[kMaxReplacementTextures]{};
+AppliedNamedRecord g_AppliedNamed[512]{};
+std::size_t g_NextAppliedNamed{};
 
 bool HexDigit(char value, std::uint8_t* output) {
     if (output == nullptr) {
@@ -131,6 +129,7 @@ bool EnsureRuntimeState() {
         return false;
     }
     g_Scanner.BindVerifiedMain(mainBase);
+    g_LoadedTextures.BindVerifiedMain(mainBase);
 
     const auto skinRoot = g_Scanner.FindSingleSkinRoot(
         kSkinRootParent, g_SkinRoot, sizeof(g_SkinRoot));
@@ -180,82 +179,79 @@ void MarkApplied(std::string_view collection, std::uint32_t atlasIndex,
     target->textureAddress = textureAddress;
 }
 
-bool WasStandaloneApplied(std::string_view name,
-                          std::uintptr_t textureAddress) {
-    for (const auto& record : g_AppliedStandalone) {
-        if (record.textureAddress == textureAddress &&
-            std::string_view(record.name) == name) {
-            return true;
-        }
+bool WasNamedApplied(std::string_view name,
+                     const unity::TextureIdentity& identity) {
+    for (const auto& record : g_AppliedNamed) {
+        if (record.native == identity.nativePointer &&
+            record.instanceId == identity.instanceId &&
+            std::string_view(record.name) == name) return true;
     }
     return false;
 }
 
-void MarkStandaloneApplied(std::string_view name,
-                           std::uintptr_t textureAddress) {
-    AppliedStandaloneRecord* target = nullptr;
-    for (auto& record : g_AppliedStandalone) {
-        if (std::string_view(record.name) == name) {
-            target = &record;
-            break;
-        }
-        if (target == nullptr && record.name[0] == '\0') {
-            target = &record;
-        }
-    }
-    if (target == nullptr || name.size() + 1 > sizeof(target->name)) {
-        return;
-    }
-    std::memcpy(target->name, name.data(), name.size());
-    target->name[name.size()] = '\0';
-    target->textureAddress = textureAddress;
+void MarkNamedApplied(std::string_view name,
+                      const unity::TextureMetadata& metadata) {
+    auto& record = g_AppliedNamed[g_NextAppliedNamed++ % 512];
+    std::memcpy(record.name, name.data(), name.size());
+    record.name[name.size()] = '\0';
+    record.native = metadata.nativePointer;
+    record.instanceId = metadata.instanceId;
 }
 
-bool WasSpriteApplied(std::string_view name, std::uintptr_t textureAddress) {
-    for (const auto& record : g_AppliedSprites) {
-        if (record.textureAddress == textureAddress &&
-            std::string_view(record.name) == name) {
-            return true;
-        }
+TextureVisitResult ApplyNamedTexture(void* texture, const char* observer,
+                                    const char* spriteName = nullptr) {
+    unity::TextureIdentity identity{};
+    if (!g_TextureReplacer.ReadIdentity(texture, &identity)) return TextureVisitResult::Unchanged;
+    char name[kResourceNameCapacity]{};
+    if (!g_TextureReplacer.ReadName(texture, name, sizeof(name))) {
+        return TextureVisitResult::Unchanged;
     }
-    return false;
-}
 
-void MarkSpriteApplied(std::string_view name, std::uintptr_t textureAddress) {
-    AppliedSpriteRecord* target = nullptr;
-    for (auto& record : g_AppliedSprites) {
-        if (std::string_view(record.name) == name) {
-            target = &record;
-            break;
-        }
-        if (target == nullptr && record.name[0] == '\0') {
-            target = &record;
-        }
+    if (WasNamedApplied(name, identity)) return TextureVisitResult::Unchanged;
+    ReplacementTexture replacement{};
+    auto resolved = g_Scanner.ResolveStandalone(g_SkinRoot, name, &replacement);
+    const char* source = "standalone";
+    if (resolved.error != SdReadError::None) {
+        resolved = g_Scanner.ResolveSpriteTexture(g_SkinRoot, name, &replacement);
+        source = "sprite";
     }
-    if (target == nullptr || name.size() + 1 > sizeof(target->name)) {
-        return;
+    // A whole atlas cannot be safely applied to a differently named texture
+    // using only a sprite name and matching dimensions: the UV layout may differ.
+    if (resolved.error != SdReadError::None) return TextureVisitResult::Unchanged;
+    unity::TextureMetadata metadata{};
+    if (!g_TextureReplacer.ReadMetadata(texture, &metadata)) {
+        Logging.Log("[Skin] texture=%s metadata unavailable; retry later", name);
+        return TextureVisitResult::Retry;
     }
-    std::memcpy(target->name, name.data(), name.size());
-    target->name[name.size()] = '\0';
-    target->textureAddress = textureAddress;
-}
-
-void LogSnapshot(const tk2d::CollectionSnapshot& snapshot,
-                 std::size_t replacementCount) {
-    Logging.Log("[Skin] collection=%s materials=%u textures=%u ids=%u replacements=%u",
-                snapshot.name, snapshot.materialCount, snapshot.textureCount,
-                snapshot.materialPngTextureIdCount,
-                static_cast<unsigned>(replacementCount));
-    const auto observedCount = snapshot.textureCount < tk2d::kMaxObservedAtlases
-                                   ? snapshot.textureCount
-                                   : tk2d::kMaxObservedAtlases;
-    for (std::uint32_t index = 0; index < observedCount; ++index) {
-        Logging.Log("[Skin] atlas%u texture=%016lx materialPngTextureId=%d",
-                    index, reinterpret_cast<std::uintptr_t>(snapshot.textures[index]),
-                    index < snapshot.materialPngTextureIdCount
-                        ? snapshot.materialPngTextureIds[index]
-                        : -1);
+    FileBuffer png{};
+    const auto read = g_Scanner.ReadReplacement(replacement, &png);
+    if (read.error != SdReadError::None) {
+        Logging.Log("[Skin] texture=%s read failed error=%s result=0x%08x",
+                    name, SdReadErrorName(read.error), read.result);
+        return TextureVisitResult::Retry;
     }
+    image::PngInfo pngInfo{};
+    if (!image::InspectPng(png.data, png.size, &pngInfo) ||
+        pngInfo.width != metadata.width || pngInfo.height != metadata.height) {
+        Logging.Log("[Skin] texture=%s PNG rejected png=%ux%u target=%ux%u",
+                    name, pngInfo.width, pngInfo.height, metadata.width, metadata.height);
+        return TextureVisitResult::Unchanged;
+    }
+    g_ApplyInProgress = true;
+    const auto operation = g_TextureReplacer.ApplyPng(
+        texture, png.data, png.size, replacement.width, replacement.height);
+    g_ApplyInProgress = false;
+    Logging.Log("[Skin] texture=%s observer=%s source=%s operation=%s sprite=%s target=%ux%u format=%d instance=%d",
+                name, observer, source, unity::TextureOperationName(operation),
+                spriteName ? spriteName : "<none>", metadata.width, metadata.height,
+                metadata.format, metadata.instanceId);
+    if (operation == unity::TextureOperation::Applied) {
+        g_TextureReplacer.ReadMetadata(texture, &metadata);
+        MarkNamedApplied(name, metadata);
+        return TextureVisitResult::Applied;
+    }
+    return operation == unity::TextureOperation::LoadFailed
+        ? TextureVisitResult::Retry : TextureVisitResult::Unchanged;
 }
 
 #endif
@@ -305,8 +301,6 @@ void OnCollectionInitialized(void* collection) {
         return;
     }
 
-    LogSnapshot(snapshot, replacementCount);
-
     for (std::uint32_t index = 0; index < observedCount; ++index) {
         ReplacementTexture replacement{};
         const auto resolved = g_Scanner.ResolveCollection(
@@ -332,9 +326,6 @@ void OnCollectionInitialized(void* collection) {
                         snapshot.name, index);
             continue;
         }
-        Logging.Log("[Skin] atlas%u target=%ux%u format=%d native=%016lx",
-                    index, metadata.width, metadata.height, metadata.format,
-                    metadata.nativePointer);
 
         FileBuffer png{};
         const auto read = g_Scanner.ReadReplacement(replacement, &png);
@@ -363,8 +354,9 @@ void OnCollectionInitialized(void* collection) {
             snapshot.textures[index], png.data, png.size,
             replacement.width, replacement.height);
         g_ApplyInProgress = false;
-        Logging.Log("[Skin] %s atlas%u operation=%s", snapshot.name, index,
-                    unity::TextureOperationName(operation));
+        Logging.Log("[Skin] %s atlas%u operation=%s target=%ux%u format=%d instance=%d",
+                    snapshot.name, index, unity::TextureOperationName(operation),
+                    metadata.width, metadata.height, metadata.format, metadata.instanceId);
         if (operation == unity::TextureOperation::Applied) {
             MarkApplied(snapshot.name, index, textureAddress);
         }
@@ -375,66 +367,9 @@ void OnCollectionInitialized(void* collection) {
 void OnStandaloneTextureAssigned(void* texture) {
 #ifndef SILKMODLOADER_ENABLE_RUNTIME_SKIN
     EXL_UNUSED(texture);
-    return;
 #else
-    if (g_ApplyInProgress || texture == nullptr || !EnsureRuntimeState()) {
-        return;
-    }
-
-    char name[kResourceNameCapacity]{};
-    if (!g_TextureReplacer.ReadName(texture, name, sizeof(name))) {
-        return;
-    }
-    ReplacementTexture replacement{};
-    const auto resolved = g_Scanner.ResolveStandalone(
-        g_SkinRoot, std::string_view(name), &replacement);
-    if (resolved.error != SdReadError::None) {
-        return;
-    }
-
-    const auto textureAddress = reinterpret_cast<std::uintptr_t>(texture);
-    if (textureAddress == 0 ||
-        WasStandaloneApplied(std::string_view(name), textureAddress)) {
-        return;
-    }
-
-    unity::TextureMetadata metadata{};
-    if (!g_TextureReplacer.ReadMetadata(texture, &metadata)) {
-        Logging.Log("[Skin] standalone %s metadata read failed", name);
-        return;
-    }
-    Logging.Log("[Skin] standalone name=%s target=%ux%u format=%d native=%016lx",
-                name, metadata.width, metadata.height, metadata.format,
-                metadata.nativePointer);
-
-    FileBuffer png{};
-    const auto read = g_Scanner.ReadReplacement(replacement, &png);
-    if (read.error != SdReadError::None) {
-        Logging.Log("[Skin] standalone %s read failed error=%s result=0x%08x",
-                    name, SdReadErrorName(read.error), read.result);
-        return;
-    }
-
-    image::PngInfo pngInfo{};
-    if (!image::InspectPng(png.data, png.size, &pngInfo)) {
-        Logging.Log("[Skin] standalone %s PNG validation failed", name);
-        return;
-    }
-    if (pngInfo.width != metadata.width || pngInfo.height != metadata.height) {
-        Logging.Log("[Skin] standalone %s dimension mismatch png=%ux%u target=%ux%u",
-                    name, pngInfo.width, pngInfo.height,
-                    metadata.width, metadata.height);
-        return;
-    }
-
-    g_ApplyInProgress = true;
-    const auto operation = g_TextureReplacer.ApplyPng(
-        texture, png.data, png.size, replacement.width, replacement.height);
-    g_ApplyInProgress = false;
-    Logging.Log("[Skin] standalone %s operation=%s", name,
-                unity::TextureOperationName(operation));
-    if (operation == unity::TextureOperation::Applied) {
-        MarkStandaloneApplied(std::string_view(name), textureAddress);
+    if (!g_ApplyInProgress && texture != nullptr && EnsureRuntimeState()) {
+        ApplyNamedTexture(texture, "material");
     }
 #endif
 }
@@ -442,71 +377,32 @@ void OnStandaloneTextureAssigned(void* texture) {
 void OnSpriteAssigned(void* sprite) {
 #ifndef SILKMODLOADER_ENABLE_RUNTIME_SKIN
     EXL_UNUSED(sprite);
-    return;
 #else
-    if (g_ApplyInProgress || sprite == nullptr || !EnsureRuntimeState()) {
-        return;
-    }
-
+    if (g_ApplyInProgress || sprite == nullptr || !EnsureRuntimeState()) return;
     void* texture = g_TextureReplacer.GetSpriteTexture(sprite);
-    if (texture == nullptr) {
-        return;
-    }
-    char name[kResourceNameCapacity]{};
-    if (!g_TextureReplacer.ReadName(texture, name, sizeof(name))) {
-        return;
-    }
-    ReplacementTexture replacement{};
-    const auto resolved = g_Scanner.ResolveSpriteTexture(
-        g_SkinRoot, std::string_view(name), &replacement);
-    if (resolved.error != SdReadError::None) {
-        return;
-    }
+    if (texture == nullptr) return;
+    char spriteName[kResourceNameCapacity]{};
+    g_TextureReplacer.ReadName(sprite, spriteName, sizeof(spriteName));
+    ApplyNamedTexture(texture, "sprite", spriteName);
+#endif
+}
 
-    const auto textureAddress = reinterpret_cast<std::uintptr_t>(texture);
-    if (textureAddress == 0 ||
-        WasSpriteApplied(std::string_view(name), textureAddress)) {
-        return;
-    }
+TextureVisitResult OnLoadedTextureDiscovered(void* texture) {
+#ifndef SILKMODLOADER_ENABLE_RUNTIME_SKIN
+    EXL_UNUSED(texture);
+    return TextureVisitResult::Unchanged;
+#else
+    if (g_ApplyInProgress || !EnsureRuntimeState()) return TextureVisitResult::Retry;
+    return ApplyNamedTexture(texture, "discovery");
+#endif
+}
 
-    unity::TextureMetadata metadata{};
-    if (!g_TextureReplacer.ReadMetadata(texture, &metadata)) {
-        Logging.Log("[Skin] sprite-texture %s metadata read failed", name);
-        return;
-    }
-    Logging.Log("[Skin] sprite-texture name=%s target=%ux%u format=%d native=%016lx",
-                name, metadata.width, metadata.height, metadata.format,
-                metadata.nativePointer);
-
-    FileBuffer png{};
-    const auto read = g_Scanner.ReadReplacement(replacement, &png);
-    if (read.error != SdReadError::None) {
-        Logging.Log("[Skin] sprite-texture %s read failed error=%s result=0x%08x",
-                    name, SdReadErrorName(read.error), read.result);
-        return;
-    }
-
-    image::PngInfo pngInfo{};
-    if (!image::InspectPng(png.data, png.size, &pngInfo)) {
-        Logging.Log("[Skin] sprite-texture %s PNG validation failed", name);
-        return;
-    }
-    if (pngInfo.width != metadata.width || pngInfo.height != metadata.height) {
-        Logging.Log("[Skin] sprite-texture %s dimension mismatch png=%ux%u target=%ux%u",
-                    name, pngInfo.width, pngInfo.height,
-                    metadata.width, metadata.height);
-        return;
-    }
-
-    g_ApplyInProgress = true;
-    const auto operation = g_TextureReplacer.ApplyPng(
-        texture, png.data, png.size, replacement.width, replacement.height);
-    g_ApplyInProgress = false;
-    Logging.Log("[Skin] sprite-texture %s operation=%s", name,
-                unity::TextureOperationName(operation));
-    if (operation == unity::TextureOperation::Applied) {
-        MarkSpriteApplied(std::string_view(name), textureAddress);
-    }
+void OnMainThreadFrame() {
+#ifdef SILKMODLOADER_ENABLE_RUNTIME_SKIN
+    if (g_ApplyInProgress || g_DiscoveryInProgress || !EnsureRuntimeState()) return;
+    g_DiscoveryInProgress = true;
+    g_LoadedTextures.Tick(g_TextureReplacer);
+    g_DiscoveryInProgress = false;
 #endif
 }
 

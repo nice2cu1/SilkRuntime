@@ -238,6 +238,19 @@ Loader 启动时会枚举 `Skin/` 的直接子目录，并要求恰好存在一�
 生成的资源结构。没有皮肤子目录或同时存在多个皮肤子目录时，Loader 会跳过皮肤
 替换。当前 Loader 不读取 `active.txt`；这个文件不应出现在最终包中。
 
+## 已加载纹理发现
+
+SkinLoader 在 Unity 主线程定期枚举已加载的 Texture2D，分帧处理预先绑定在
+Prefab/Sprite/材质中以及后续加载的纹理。它与现有 Sprite、Material 观察入口
+共用精确名称匹配和对象身份去重。已收到 Switch 的 discovery 应用成功日志及用户
+画面确认。缓存使用 native 地址和 Instance ID、线性探测及前后两轮记录，减少冲突
+与重复文件访问。扫描摘要仅在首次、有实际应用或异常时输出；本次缓存优化待真机复核。
+
+扫描与 GCHandle 生命周期见 [loaded_texture_scanner.cpp](source/skin/loaded_texture_scanner.cpp)，
+二进制地址绑定见 [offsets.hpp](source/program/offsets.hpp)。GDB SVC 中使用 `[SkinScan]`
+及 `observer=discovery` 识别新路径。这项改动需要配套 SilkPorter 从当前 ELF 重新生成 IPS32。
+枚举和单次 LoadImage 不能拆分，实际帧耗时仍需真机确认。
+
 ## 发布与许可证
 
 发布运行时二进制时，应同时记录源码版本、构建参数、工具链版本、目标游戏

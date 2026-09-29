@@ -21,25 +21,34 @@ bool TextureReplacer::BindVerifiedMain(std::uintptr_t mainBase) {
         mainBase + silkmodloader::game::kVerifiedIl2CppOffsets.object_get_name);
     m_GetSpriteTexture = reinterpret_cast<GetNameFn>(
         mainBase + silkmodloader::game::kVerifiedIl2CppOffsets.sprite_get_texture);
+    m_GetInstanceId = reinterpret_cast<TextureGetterFn>(
+        mainBase + silkmodloader::game::kVerifiedIl2CppOffsets.object_get_instance_id);
     m_LoadImageInjected = reinterpret_cast<LoadImageInjectedFn>(
         mainBase + silkmodloader::game::kVerifiedIl2CppOffsets
                        .imageConversion_LoadImage_Injected);
     return m_GetWidth != nullptr && m_GetHeight != nullptr &&
            m_GetFormat != nullptr && m_GetName != nullptr &&
-           m_GetSpriteTexture != nullptr &&
+           m_GetSpriteTexture != nullptr && m_GetInstanceId != nullptr &&
            m_LoadImageInjected != nullptr;
+}
+
+bool TextureReplacer::ReadIdentity(void* managedObject, TextureIdentity* output) const {
+    if (managedObject == nullptr || output == nullptr || m_GetInstanceId == nullptr) {
+        return false;
+    }
+    const auto nativePointer = *reinterpret_cast<const std::uintptr_t*>(
+        reinterpret_cast<std::uintptr_t>(managedObject) + 0x10);
+    if (nativePointer == 0) return false;
+    output->nativePointer = nativePointer;
+    output->instanceId = m_GetInstanceId(managedObject, nullptr);
+    return true;
 }
 
 bool TextureReplacer::ReadMetadata(void* managedTexture,
                                    TextureMetadata* output) const {
-    if (managedTexture == nullptr || output == nullptr || m_GetWidth == nullptr ||
-        m_GetHeight == nullptr || m_GetFormat == nullptr) {
-        return false;
-    }
-
-    const auto nativePointer = *reinterpret_cast<const std::uintptr_t*>(
-        reinterpret_cast<std::uintptr_t>(managedTexture) + 0x10);
-    if (nativePointer == 0) {
+    TextureIdentity identity{};
+    if (output == nullptr || m_GetWidth == nullptr || m_GetHeight == nullptr ||
+        m_GetFormat == nullptr || !ReadIdentity(managedTexture, &identity)) {
         return false;
     }
 
@@ -51,7 +60,8 @@ bool TextureReplacer::ReadMetadata(void* managedTexture,
     output->width = static_cast<std::uint32_t>(width);
     output->height = static_cast<std::uint32_t>(height);
     output->format = m_GetFormat(managedTexture, nullptr);
-    output->nativePointer = nativePointer;
+    output->nativePointer = identity.nativePointer;
+    output->instanceId = identity.instanceId;
     return true;
 }
 

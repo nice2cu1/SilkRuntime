@@ -11,4 +11,10 @@ void OnStandaloneTextureAssigned(void* texture);
 /* Called after the verified SpriteRenderer/Image sprite observers. */
 void OnSpriteAssigned(void* sprite);
 
+enum class TextureVisitResult { Unchanged, Applied, Retry };
+
+/* Main-thread discovery uses the same named replacement path as the hooks. */
+TextureVisitResult OnLoadedTextureDiscovered(void* texture);
+void OnMainThreadFrame();
+
 } // namespace silkmodloader::skin

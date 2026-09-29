@@ -35,6 +35,7 @@ struct Il2CppOffsets {
     uintptr_t sprite_get_texture;
     uintptr_t spriteRenderer_set_sprite;
     uintptr_t uiImage_set_sprite;
+    uintptr_t object_get_instance_id;
 };
 
 inline constexpr char kVerifiedMainBuildIdText[] =
@@ -54,6 +55,39 @@ inline constexpr Il2CppOffsets kVerifiedIl2CppOffsets = {
     .sprite_get_texture = 0x5f426f0,
     .spriteRenderer_set_sprite = 0x5f3f650,
     .uiImage_set_sprite = 0x6182740,
+    .object_get_instance_id = 0x5ff41f0,
+};
+
+/* Offline ABI evidence is recorded in docs/loaded-texture-discovery.md.
+ * These addresses are bound only after the main Build ID is accepted. */
+struct LoadedTextureOffsets {
+    uintptr_t initialize_runtime_metadata;
+    uintptr_t texture2d_type_slot;
+    uintptr_t type_get_type_from_handle;
+    uintptr_t resources_find_objects_of_type_all;
+    uintptr_t gc_handle_get_target_handle;
+    uintptr_t gc_handle_get_target;
+    uintptr_t gc_handle_free_handle;
+};
+
+inline constexpr LoadedTextureOffsets kLoadedTextureOffsets = {
+    .initialize_runtime_metadata = 0xa69230,
+    .texture2d_type_slot = 0x7e09d20,
+    .type_get_type_from_handle = 0x529a320,
+    .resources_find_objects_of_type_all = 0x5fd9170,
+    .gc_handle_get_target_handle = 0x515c2d0,
+    .gc_handle_get_target = 0x515c390,
+    .gc_handle_free_handle = 0x515c630,
+};
+
+/* GameManager.Update reaches UpdateEngagement once on its normal frame path.
+ * Observe after the original function returns, on Unity's main thread. */
+inline constexpr hook::HookTarget kGameUpdateCallTarget = {
+    .name = "GameManager::UpdateEngagement frame call-site",
+    .callSiteOffset = 0x24ab56c,
+    .originalFunctionOffset = 0x24ab7a0,
+    .expectedInstruction = 0x9400008d,
+    .branchType = hook::BranchType::BL,
 };
 
 /*
@@ -94,6 +128,17 @@ inline constexpr hook::HookTarget kVerifiedUIImageSetSpriteCallTarget = {
     .callSiteOffset = 0x21acc54,
     .originalFunctionOffset = 0x6182740,
     .expectedInstruction = 0x94ff56bb,
+    .branchType = hook::BranchType::BL,
+};
+
+/* AtlasSpriteProvider::Provide fetches addressable sprites by name through
+ * this call. Observe the returned Sprite so SpriteAtlas-backed replacements
+ * are applied before the sprite is handed to its consumer. */
+inline constexpr hook::HookTarget kVerifiedSpriteAtlasGetSpriteCallTarget = {
+    .name = "SpriteAtlas::GetSprite call-site",
+    .callSiteOffset = 0x5e95a60,
+    .originalFunctionOffset = 0x6031a00,
+    .expectedInstruction = 0x94066fe8,
     .branchType = hook::BranchType::BL,
 };
 

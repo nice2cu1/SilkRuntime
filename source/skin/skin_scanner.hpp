@@ -29,6 +29,9 @@ public:
     SdReaderStatus ResolveSpriteTexture(const char* skinRoot,
                                        std::string_view textureName,
                                        ReplacementTexture* output);
+    SdReaderStatus ResolveSpriteAlias(const char* skinRoot,
+                                     std::string_view spriteName,
+                                     ReplacementTexture* output);
 
     static bool EncodeResourceFilename(std::string_view resource,
                                        char* output, std::size_t capacity);

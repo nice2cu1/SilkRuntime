@@ -3,6 +3,7 @@
 #include "tk2d_external_hook.hpp"
 #include "material_external_hook.hpp"
 #include "sprite_external_hook.hpp"
+#include "frame_external_hook.hpp"
 
 #include "lib.hpp"
 
@@ -285,6 +286,19 @@ void EmitReadOnlyUIImageHookPlan(const char* buildId,
     EmitReadOnlyHookPlanImpl(
         buildId, target, GetUIImageSetSpriteExternalHookAddress(),
         "void(void*, Sprite*, MethodInfo*)", &BindUIImageSetSpriteOriginal);
+}
+
+void EmitReadOnlySpriteAtlasGetSpriteHookPlan(const char* buildId,
+                                              const HookTarget& target) {
+    EmitReadOnlyHookPlanImpl(
+        buildId, target, GetSpriteAtlasGetSpriteExternalHookAddress(),
+        "Sprite*(SpriteAtlas*, String*, MethodInfo*)",
+        &BindSpriteAtlasGetSpriteOriginal);
+}
+
+void EmitReadOnlyGameUpdateHookPlan(const char* buildId, const HookTarget& target) {
+    EmitReadOnlyHookPlanImpl(buildId, target, GetGameUpdateExternalHookAddress(),
+                            "void(GameManager*, MethodInfo*)", &BindGameUpdateOriginal);
 }
 
 } // namespace silkmodloader::hook

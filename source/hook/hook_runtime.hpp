@@ -20,4 +20,8 @@ void EmitReadOnlySpriteRendererHookPlan(const char* buildId,
 void EmitReadOnlyUIImageHookPlan(const char* buildId,
                                  const HookTarget& target);
 
+void EmitReadOnlySpriteAtlasGetSpriteHookPlan(const char* buildId,
+                                              const HookTarget& target);
+void EmitReadOnlyGameUpdateHookPlan(const char* buildId, const HookTarget& target);
+
 } // namespace silkmodloader::hook

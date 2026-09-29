@@ -259,6 +259,62 @@ SdReaderStatus SkinScanner::ResolveSpriteTexture(const char* skinRoot,
                         ReplacementKind::SpriteTexture, output);
 }
 
+SdReaderStatus SkinScanner::ResolveSpriteAlias(const char* skinRoot,
+                                               std::string_view spriteName,
+                                               ReplacementTexture* output) {
+    if (output == nullptr || spriteName.empty() ||
+        spriteName.size() >= kResourceNameCapacity) {
+        return {SdReadError::ReadFailed, 0};
+    }
+
+    char filename[0x100]{};
+    if (!EncodeResourceFilename(spriteName, filename, sizeof(filename))) {
+        return {SdReadError::FileTooLarge, 0};
+    }
+    char* extension = std::strrchr(filename, '.');
+    if (extension == nullptr || std::strcmp(extension, ".png") != 0) {
+        return {SdReadError::ReadFailed, 0};
+    }
+    std::memcpy(extension, ".map", sizeof(".map"));
+
+    char suffix[kReplacementPathCapacity]{};
+    std::size_t cursor = 0;
+    if (!Append(suffix, sizeof(suffix), &cursor, "sprite-alias/") ||
+        !Append(suffix, sizeof(suffix), &cursor, filename)) {
+        return {SdReadError::FileTooLarge, 0};
+    }
+    char path[kReplacementPathCapacity]{};
+    if (!JoinPath(path, sizeof(path), skinRoot, suffix)) {
+        return {SdReadError::FileTooLarge, 0};
+    }
+
+    FileBuffer alias{};
+    const auto read = m_Reader.ReadAll(path, &alias, kResourceNameCapacity);
+    if (read.error != SdReadError::None) {
+        return read;
+    }
+    if (alias.size == 0 || alias.size >= kResourceNameCapacity ||
+        std::memchr(alias.data, '\0', alias.size) != nullptr) {
+        return {SdReadError::ReadFailed, 0};
+    }
+
+    std::string_view textureName(reinterpret_cast<const char*>(alias.data),
+                                 alias.size);
+    while (!textureName.empty() &&
+           (textureName.back() == '\n' || textureName.back() == '\r' ||
+            textureName.back() == ' ' || textureName.back() == '\t')) {
+        textureName.remove_suffix(1);
+    }
+    while (!textureName.empty() &&
+           (textureName.front() == ' ' || textureName.front() == '\t')) {
+        textureName.remove_prefix(1);
+    }
+    if (textureName.empty()) {
+        return {SdReadError::ReadFailed, 0};
+    }
+    return ResolveSpriteTexture(skinRoot, textureName, output);
+}
+
 SdReaderStatus SkinScanner::ReadReplacement(const ReplacementTexture& replacement,
                                             FileBuffer* output) {
     return m_Reader.ReadAll(replacement.path, output);

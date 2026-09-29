@@ -454,6 +454,11 @@ extern "C" void exl_main(void*, void*) {
         silkmodloader::hook::EmitReadOnlyUIImageHookPlan(
             mainBuildIdText,
             silkmodloader::game::kVerifiedUIImageSetSpriteCallTarget);
+        silkmodloader::hook::EmitReadOnlySpriteAtlasGetSpriteHookPlan(
+            mainBuildIdText,
+            silkmodloader::game::kVerifiedSpriteAtlasGetSpriteCallTarget);
+        silkmodloader::hook::EmitReadOnlyGameUpdateHookPlan(
+            mainBuildIdText, silkmodloader::game::kGameUpdateCallTarget);
     } else {
         Logging.Log("[Hook] installation status: SKIPPED (unknown Build ID)");
     }

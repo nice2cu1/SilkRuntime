@@ -10,11 +10,17 @@ struct ManagedSpanWrapper {
     std::int32_t length{};
 };
 
+struct TextureIdentity {
+    std::uintptr_t nativePointer{};
+    std::int32_t instanceId{};
+};
+
 struct TextureMetadata {
     std::uint32_t width{};
     std::uint32_t height{};
     std::int32_t format{};
     std::uintptr_t nativePointer{};
+    std::int32_t instanceId{};
 };
 
 enum class TextureOperation : std::uint8_t {
@@ -32,6 +38,10 @@ class TextureReplacer final {
 public:
     /* Offsets are used only after the caller has verified the exact Build ID. */
     bool BindVerifiedMain(std::uintptr_t mainBase);
+
+    /* Does not call Texture2D-specific getters. Managed wrappers may change
+     * while referring to the same native Unity object. */
+    bool ReadIdentity(void* managedObject, TextureIdentity* output) const;
 
     bool ReadMetadata(void* managedTexture, TextureMetadata* output) const;
 
@@ -55,6 +65,7 @@ private:
     TextureGetterFn m_GetFormat{};
     GetNameFn m_GetName{};
     GetNameFn m_GetSpriteTexture{};
+    TextureGetterFn m_GetInstanceId{};
     LoadImageInjectedFn m_LoadImageInjected{};
 };
 
